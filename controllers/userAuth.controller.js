@@ -231,6 +231,50 @@ class UserController {
     }
   };
 
+  // @desc    User account verification
+  // @route   POST /user/auth/verifyAccount
+  // @access  Public
+  userVerifyAccount = asyncHandler(async (req, res, next) => {
+    const lang = req.headers.lang || "en";
+    console.log("++++++++++++++++++++++++");
+    console.log(req.body.notificationToken);
+    console.log("++++++++++++++++++++++++");
+
+    if (!req.body.code)
+      return next(new ApiError(translate("Verification OTP is required", lang), 400));
+
+    const hashedCode = crypto.createHash("sha256").update(req.body.code).digest("hex");
+
+    const user = await User.findOne({ email: req.body.email });
+    if (!user || (!user.verificationCode && !user.verificationCodeExp))
+      return next(new ApiError(translate("Invalid request", lang), 400));
+
+    if (Date.now() >= Date.parse(user.verificationCodeExp))
+      return next(new ApiError(translate("Verification OTP is expired", lang), 401));
+
+    if (user.verificationCode !== hashedCode)
+      return next(new ApiError(translate("Invalid Verification OTP", lang), 401));
+
+    user.isVerified = true;
+    user.verificationCode = undefined;
+    user.verificationCodeExp = undefined;
+    user.notificationToken = req.body.notificationToken;
+    await user.save();
+
+    const token = await user.generateToken();
+
+    res.status(200).json({
+      success: true,
+      message: "Account verified successfully", 
+      data: {
+        ...this.#getUsersData(user, req),
+        ...token
+      }
+    });
+  });
+
+
+  
 }
 
 module.exports = new UserController();
