@@ -15,7 +15,6 @@ class EmailController {
       html: html
     });
   };
-
 }
 
 module.exports = new EmailController();
