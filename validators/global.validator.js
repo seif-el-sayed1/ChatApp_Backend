@@ -5,7 +5,6 @@ const User = require("../models/user.model");
 const { LOGIN_TYPE_LIST, LOGIN_TYPE_PLATFORM_LIST, LANGS } = require("../utils/constants");
 const ApiError = require("../utils/ApiError");
 const { translate } = require("../utils/translation");
-const { checkIfPhoneStartsWithPlus2 } = require("../middleware/phoneNumberChecker.middleware");
 const { phoneNumberValidator } = require("./validatorComponents");
 
 class GlobalValidator {
@@ -162,7 +161,6 @@ class GlobalValidator {
       email: Joi.string().email().optional()
     }).xor("email", "phone");
     joiErrorHandler(schema, req);
-    checkIfPhoneStartsWithPlus2(req);
     next();
   });
 
