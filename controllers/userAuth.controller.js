@@ -381,6 +381,22 @@ class UserController {
       });
     }
   });
+
+  //@desc user logout 
+  //@route POST /user/auth/log-out
+  //@access Private
+  logOut = asyncHandler(async (req, res, next) => {
+    const user = req.user;
+    await user.updateOne({
+      $unset: { notificationToken: 1, token: 1, tokenExpDate: 1 }
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "User logged out successfully!"
+    });
+  });
+
 }
 
 module.exports = new UserController();
