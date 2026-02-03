@@ -21,7 +21,7 @@ class UserController {
       email: user.email,
       dateOfBirth: user.dateOfBirth,
       age: user.age,
-      gender: user.genderEn,
+      gender: user.gender,
       nationalId: user.nationalId,
       verifiedNationalId: user.verifiedNationalId,
       createdAt: user.createdAt,
@@ -162,8 +162,7 @@ class UserController {
                 {
                     firstName: req.body.firstName,
                     lastName: req.body.lastName,
-                    genderAr: req.body.genderAr,
-                    genderEn: req.body.genderEn,
+                    gender: req.body.gender,
                     email: req.body.email,
                     dateOfBirth: req.body.dateOfBirth,
                     profilePicture: req.body.image || req.body.profilePicture,
