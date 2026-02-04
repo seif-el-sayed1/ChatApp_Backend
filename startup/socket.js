@@ -41,3 +41,46 @@ const sendMediaNotification = ({ fromUser, toUser, roomId, image }) => {
     });
   }
 };
+
+// Setup Socket.IO server and handle events
+module.exports = (server, app) => {
+  io = socketio(server, { cors: { origin: "*", methods: ["GET","POST"], credentials: true }});
+  app.set("socketio", io);
+
+  // COMMIT: Handle socket connection: join personal room, track online users, and emit online status
+  io.on("connection", async (socket) => {
+    try {
+      const token = socket.handshake.headers.authorization;
+      const userData = await getUserDetails(socket, token);
+      if (!userData) return;
+
+      // Track online users
+      socket.join(userData._id.toString());
+      onlineUsers.add(userData._id.toString());
+      io.emit("online-users", Array.from(onlineUsers));
+
+      // Deliver any pending messages
+      SocketController.messagesDeliveredOnConnect(io, socket, userData, chatRoomUsers);
+
+      // COMMIT: Add socket event handlers for typing, messaging, and chat room management
+      // Handle chat events
+      socket.on("typing", (data) => SocketController.startTyping(socket, userData, data));
+      socket.on("stop-typing", (data) => SocketController.stopTyping(socket, userData, data));
+      socket.on("message-delivered", (data) => SocketController.messageDelivered(io, socket, userData, chatRoomUsers, data));
+      socket.on("join-chat", (data) => SocketController.joinChat(io, socket, userData, chatRoomUsers, data));
+      socket.on("leave-chat", (data) => SocketController.leaveChat(socket, userData, chatRoomUsers, data));
+      socket.on("new-message", (data) => SocketController.sendChatMessage(io, socket, userData, chatRoomUsers, data, Array.from(onlineUsers)));
+
+      // COMMIT: Handle user disconnect: remove from online list and leave all chat rooms
+      // Remove user from online tracking on disconnect
+      socket.on("disconnect", () => {
+        onlineUsers.delete(userData._id.toString());
+        SocketController.leaveAllChats(socket, userData, chatRoomUsers);
+        io.emit("online-users", Array.from(onlineUsers));
+      });
+
+    } catch (error) {
+      socket.emit("error", { message: error.message });
+    }
+  });
+};
