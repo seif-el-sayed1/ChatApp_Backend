@@ -382,6 +382,31 @@ class SocketController {
     }
   };
 
+  leaveAllChats = (socket, userData, chatRoomUsers) => {
+    try {
+        const userId = userData._id.toString();
+
+        // Iterate over all chat rooms
+        for (const [chatId, users] of Object.entries(chatRoomUsers)) {
+            if (users.has(userId)) {
+                // Remove user from the socket room
+                socket.leave(chatId.toString());
+
+                // Remove user from in-memory map
+                users.delete(userId);
+
+                // Clean up empty chat room
+                if (users.size === 0) {
+                    delete chatRoomUsers[chatId];
+                }
+
+            }
+        }
+
+    } catch (error) {
+        socket.emit("error", { message: error.message });
+    }
+  };
 
 }
 
