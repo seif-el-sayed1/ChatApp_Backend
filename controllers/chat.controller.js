@@ -1,0 +1,326 @@
+const asyncHandler = require("express-async-handler");
+const Message = require("../models/message.model");
+const Chat = require("../models/chat.model");
+const ApiFeatures = require("../utils/ApiFeatures");
+const ApiError = require("../utils/ApiError");
+const { default: mongoose } = require("mongoose");
+const FirebaseImageController = require("./firebase.controller");
+const { sendMediaNotification } = require("./../startup/socket");
+const { translate } = require("../utils/translation");
+
+class ChatController {
+  // @desc    Get My Chats
+  // @route   GET /chats
+  // @access  Private
+  getMyChats = asyncHandler(async (req, res) => {
+    const { _id: userId, blockedUsers: loggedUserBlockedUsers } = req.user;
+
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const search = req.query.search || "";
+    const noOfMessages = parseInt(req.query.noOfMessages) || 10;
+
+    // Match chats where the user is a participant
+    const matchParticipantStage = {
+      $match: {
+        participants: userId
+      }
+    };
+
+    // Populate participants info
+    const lookupUsersStage = {
+      $lookup: {
+        from: "users",
+        localField: "participants",
+        foreignField: "_id",
+        as: "participants"
+      }
+    };
+
+    // Compute 'to' user (other participant) & if chat cleared by me
+    const addToStage = {
+      $addFields: {
+        to: {
+          $arrayElemAt: [
+            {
+              $filter: {
+                input: "$participants",
+                as: "participant",
+                cond: {
+                  $ne: ["$$participant._id", userId]
+                }
+              }
+            },
+            0
+          ]
+        },
+        isClearedByMe: {
+          $eq: ["$clearedBy", userId]
+        }
+      }
+    };
+
+    // Filter by search term if provided
+    const searchStage = search
+      ? [
+          {
+            $match: {
+              $or: [
+                {
+                  "to.firstName": {
+                    $regex: search,
+                    $options: "i"
+                  }
+                },
+                {
+                  "to.lastName": {
+                    $regex: search,
+                    $options: "i"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      : [];
+
+    // Lookup last N messages, ignore cleared ones
+    const lookupMessagesStage = {
+      $lookup: {
+        from: "messages",
+        let: {
+          chatId: "$_id",
+          clearedAt: "$clearedAt",
+          isClearedByMe: "$isClearedByMe"
+        },
+        pipeline: [
+          {
+            $match: {
+              $expr: {
+                $and: [
+                  {
+                    $eq: ["$chat", "$$chatId"]
+                  },
+                  {
+                    $or: [
+                      { $eq: ["$$isClearedByMe", false] },
+                      { $gt: ["$createdAt", "$$clearedAt"] }
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          {
+            $sort: {
+              createdAt: -1
+            }
+          },
+          {
+            $limit: noOfMessages
+          }
+        ],
+        as: "messages"
+      }
+    };
+
+    // Flatten messages for grouping
+    const unwindStage = {
+      $unwind: {
+        path: "$messages",
+        preserveNullAndEmptyArrays: true
+      }
+    };
+
+    // Group back chats and attach last message
+    const groupStage = {
+      $group: {
+        _id: "$_id",
+        messages: {
+          $push: "$messages"
+        },
+        to: {
+          $first: "$to"
+        },
+        blockedByArray: {
+          $first: "$blockedByArray"
+        },
+        lastMessage: {
+          $first: {
+            $cond: {
+              if: { $isArray: "$messages" },
+              then: { $arrayElemAt: ["$messages", 0] },
+              else: "$messages"
+            }
+          }
+        }
+      }
+    };
+
+    // Remove chats with no messages
+    const removeEmptyChatsStage = {
+      $match: {
+        messages: { $ne: [] }
+      }
+    };
+
+    // Compute unread count and blocked status
+    const addComputedFieldsStage = {
+      $addFields: {
+        blockedByArray: {
+          $cond: {
+            if: { $isArray: "$blockedByArray" },
+            then: "$blockedByArray",
+            else: []
+          }
+        },
+        unreadMessagesCount: {
+          $sum: {
+            $map: {
+              input: { $ifNull: ["$messages", []] },
+              as: "msg",
+              in: {
+                $cond: [
+                  {
+                    $and: [
+                      { $eq: ["$$msg.isRead", false] },
+                      { $ne: ["$$msg.sender", userId] }
+                    ]
+                  },
+                  1,
+                  0
+                ]
+              }
+            }
+          }
+        },
+        blocked: {
+          $or: [
+            { $in: ["$to._id", loggedUserBlockedUsers] },
+            { $in: [userId, "$to.blockedUsers"] }
+          ]
+        },
+        blockedByMe: {
+          $in: ["$to._id", loggedUserBlockedUsers]
+        },
+        blockedByOtherUser: {
+          $in: [userId, "$to.blockedUsers"]
+        },
+        lastMessageCreatedAt: {
+          $ifNull: ["$lastMessage.createdAt", null]
+        }
+      }
+    };
+
+    // Project only necessary fields to frontend
+    const projectStage = {
+      $project: {
+        to: {
+          _id: 1,
+          profilePicture: 1,
+          isActive: 1,
+          fullName: {
+            $concat: ["$to.firstName", " ", "$to.lastName"]
+          }
+        },
+        messages: {
+          $map: {
+            input: { $ifNull: ["$messages", []] },
+            as: "msg",
+            in: {
+              _id: "$$msg._id",
+              content: "$$msg.content",
+              type: "$$msg.type",
+              isDelivered: "$$msg.isDelivered",
+              isRead: "$$msg.isRead",
+              createdAt: "$$msg.createdAt",
+              isMyMsg: {
+                $eq: ["$$msg.sender", userId]
+              }
+            }
+          }
+        },
+        unreadMessagesCount: 1,
+        blocked: 1,
+        blockedByMe: 1,
+        blockedByOtherUser: 1,
+        lastMessageCreatedAt: 1
+      }
+    };
+
+    // Only include active users
+    const activeUsersStage = {
+      $match: {
+        "to.isActive": true
+      }
+    };
+
+    // Sort chats by last message
+    const sortStage = {
+      $sort: {
+        lastMessageCreatedAt: -1
+      }
+    };
+
+    const basePipeline = [
+      matchParticipantStage,
+      lookupUsersStage,
+      addToStage,
+      ...searchStage,
+      lookupMessagesStage,
+      unwindStage,
+      groupStage,
+      removeEmptyChatsStage,
+      addComputedFieldsStage,
+      projectStage,
+      activeUsersStage,
+      sortStage
+    ];
+
+    const pipeline = [
+      ...basePipeline,
+      { $skip: skip },
+      { $limit: limit }
+    ];
+
+    const countPipeline = [
+      ...basePipeline,
+      { $count: "totalChats" }
+    ];
+
+    // Run aggregation in parallel
+    const [chats, totalCountResult] = await Promise.all([
+      Chat.aggregate(pipeline),
+      Chat.aggregate(countPipeline)
+    ]);
+
+    // Mark messages as delivered
+    await Message.updateMany(
+      {
+        sender: { $ne: userId },
+        chat: { $in: chats.map(chat => chat._id) }
+      },
+      {
+        isDelivered: true
+      }
+    );
+
+    const totalChats = totalCountResult[0]?.totalChats || 0;
+    const totalPages = Math.ceil(totalChats / limit);
+
+    res.status(200).json({
+      success: true,
+      pagination: {
+        totalResults: totalChats,
+        totalPages,
+        page,
+        limit
+      },
+      data: chats
+    });
+  });
+
+}
+
+module.exports = new ChatController();
