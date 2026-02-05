@@ -97,7 +97,6 @@ const userSchema = mongoose.Schema(
   },
   { timestamps: true }
 );
-userSchema.index({ location: "2dsphere" });
 
 // Creating a partial unique index
 userSchema.index(
