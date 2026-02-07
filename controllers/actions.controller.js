@@ -99,6 +99,21 @@ class ActionsController {
       message: "User Has been Unblocked Successfully"
     });
   });
+
+  // @desc    Update User Lang
+  // @route   PATCH /user/lang
+  // @access  Private [User, Entity]
+  updateUserLang = asyncHandler(async (req, res, next) => {
+      const user = req.user;
+      let { lang } = req.body;
+      lang = lang.toLowerCase();
+      user.lang = lang;
+      await user.save();
+      res.status(200).json({
+          success: true,
+          message: "Language is updated successfully"
+      });
+  });
   
 }
 
